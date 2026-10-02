@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: dinestay-backend
+    env: docker
+    region: singapore
+    plan: free
+    branch: main
+    envVars:
+      - key: SPRING_DATASOURCE_URL
+        value: jdbc:postgresql://aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres?sslmode=require&stringtype=unspecified
+      - key: SPRING_DATASOURCE_USERNAME
+        value: postgres.jpkhvelgfsuumybrwnkl
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      - key: SPRING_DATA_REDIS_URL
+        sync: false
+      - key: SPRING_KAFKA_LISTENER_AUTO_STARTUP
+        value: "false"
+      - key: APP_JWT_SECRET
+        value: super-secret-jwt-key-change-in-production
+      - key: APP_JWT_REFRESH_SECRET
+        value: super-secret-refresh-key-change-in-production
+      - key: SPRING_MAIL_PASSWORD
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false

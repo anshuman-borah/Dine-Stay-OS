@@ -1,5 +1,5 @@
 package project.EnterpriseSaas.demo.modules.menu.entity;
-
+import java.io.Serializable;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -21,7 +21,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Builder
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class Category {
+public class Category{
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

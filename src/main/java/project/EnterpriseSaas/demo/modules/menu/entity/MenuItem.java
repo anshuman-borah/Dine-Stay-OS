@@ -15,6 +15,7 @@ import project.EnterpriseSaas.demo.common.enums.ItemType;
 import project.EnterpriseSaas.demo.modules.branch.entity.Branch;
 import project.EnterpriseSaas.demo.modules.tenant.entity.Tenant;
 
+import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -29,7 +30,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Builder
 @JsonIgnoreProperties({"hibernateLazyInitializer", "handler"})
-public class MenuItem {
+public class MenuItem  {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
