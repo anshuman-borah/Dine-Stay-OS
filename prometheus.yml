@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 5s # Check the server every 5 seconds
+
+scrape_configs:
+  - job_name: 'dinestay-backend'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:4000']
