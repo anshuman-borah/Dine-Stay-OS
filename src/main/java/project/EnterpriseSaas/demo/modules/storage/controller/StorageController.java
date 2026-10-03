@@ -37,7 +37,7 @@ public class StorageController {
             @RequestHeader("x-tenant-id") UUID tenantId,
             jakarta.servlet.http.HttpServletRequest request
     ) {
-        // Safely extract and decode the path (handles spaces like %20 in filenames)
+        // Safely extract and decode the Cloudinary public_id
         String requestUri = request.getRequestURI();
         String basePath = "/api/v1/storage/";
         int index = requestUri.indexOf(basePath);
@@ -45,15 +45,15 @@ public class StorageController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid path");
         }
 
-        String path = requestUri.substring(index + basePath.length());
-        path = URLDecoder.decode(path, StandardCharsets.UTF_8);
+        String publicId = requestUri.substring(index + basePath.length());
+        publicId = URLDecoder.decode(publicId, StandardCharsets.UTF_8);
 
-        // Multi-tenant security check
-        if (!path.startsWith(tenantId.toString() + "/")) {
+        // Multi-tenant security check adapted for Cloudinary paths
+        if (!publicId.contains(tenantId.toString())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You can only delete files belonging to your account");
         }
 
-        storageService.delete(path);
+        storageService.delete(publicId);
         return ResponseEntity.noContent().build();
     }
 }
