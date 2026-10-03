@@ -15,6 +15,8 @@ import project.EnterpriseSaas.demo.modules.auth.service.SessionService;
 import project.EnterpriseSaas.demo.modules.user.dto.ChangePasswordDto;
 import project.EnterpriseSaas.demo.modules.user.entity.User;
 import project.EnterpriseSaas.demo.modules.user.repository.UserRepository;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.http.ResponseEntity;
 
 import java.util.Map;
 import java.util.UUID;
@@ -27,6 +29,11 @@ public class AuthController {
     private final AuthService authService;
     private final SessionService sessionService;
     private final UserRepository userRepo;
+
+    @GetMapping("/ping")
+    public ResponseEntity<String> ping() {
+        return ResponseEntity.ok("Server is awake!");
+    }
 
     // ── Public Routes ────────────────────────────────────────────────────────
 
