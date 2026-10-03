@@ -66,7 +66,7 @@ public class BillingService {
 
     @Transactional
     public Bill createBill(CreateBillDto dto, UUID tenantId, UUID branchId) {
-        Order order = orderRepo.findByIdAndTenantId(dto.getOrderId(), tenantId)
+        Order order = orderRepo.findByIdAndTenantIdWithRelations(dto.getOrderId(), tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found"));
 
         if (order.getStatus() == OrderStatus.billed) {

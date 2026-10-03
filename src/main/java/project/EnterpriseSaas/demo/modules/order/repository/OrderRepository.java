@@ -22,6 +22,16 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     @Query("SELECT o FROM Order o WHERE o.id = :id AND o.tenant.id = :tenantId")
     Optional<Order> findByIdAndTenantId(@Param("id") UUID id, @Param("tenantId") UUID tenantId);
 
+    // 🟢 THE FIX: Pulls Order, Tenant, Branch, Table, Shift, and Waiter in 1 single query instead of 6!
+    @Query("SELECT o FROM Order o " +
+            "LEFT JOIN FETCH o.tenant " +
+            "LEFT JOIN FETCH o.branch " +
+            "LEFT JOIN FETCH o.table " +
+            "LEFT JOIN FETCH o.shift " +
+            "LEFT JOIN FETCH o.waiter " +
+            "WHERE o.id = :id AND o.tenant.id = :tenantId")
+    Optional<Order> findByIdAndTenantIdWithRelations(@Param("id") UUID id, @Param("tenantId") UUID tenantId);
+
     @Query("SELECT o FROM Order o WHERE o.branch.id = :branchId AND o.tenant.id = :tenantId ORDER BY o.createdAt DESC")
     List<Order> findByBranchAndTenant(@Param("branchId") UUID branchId, @Param("tenantId") UUID tenantId, Pageable pageable);
 
