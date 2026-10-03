@@ -2,6 +2,8 @@ package project.EnterpriseSaas.demo.modules.menu.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,7 +24,7 @@ import project.EnterpriseSaas.demo.modules.menu.repository.MenuItemRepository;
 import project.EnterpriseSaas.demo.modules.menu.repository.MenuItemVariationRepository;
 import project.EnterpriseSaas.demo.modules.tenant.entity.Tenant;
 import project.EnterpriseSaas.demo.modules.tenant.repository.TenantRepository;
-import org.springframework.cache.annotation.Cacheable;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
@@ -42,12 +44,14 @@ public class MenuService {
     private final BranchRepository branchRepo;
 
     // ── Categories ───────────────────────────────────────────────────────────
+
     @Cacheable(value = "categories")
     public List<Category> getCategories(UUID tenantId, UUID branchId) {
         return catRepo.findCategories(tenantId, branchId);
     }
 
     @Transactional
+    @CacheEvict(value = "categories", allEntries = true)
     public Category createCategory(UUID tenantId, UUID branchId, CreateCategoryDto dto) {
         Tenant tenant = tenantRepo.findById(tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
@@ -69,6 +73,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "categories", allEntries = true)
     public Category updateCategory(UUID id, UUID tenantId, UpdateCategoryDto dto) {
         Category cat = catRepo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Category not found"));
@@ -84,6 +89,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = {"categories", "menuItems"}, allEntries = true)
     public Map<String, Boolean> removeCategory(UUID id, UUID tenantId) {
         Category cat = catRepo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Category not found"));
@@ -93,6 +99,7 @@ public class MenuService {
     }
 
     // ── Menu Items ───────────────────────────────────────────────────────────
+
     @Cacheable(value = "menuItems")
     public List<MenuItem> getItems(UUID tenantId, UUID branchId, UUID categoryId) {
         return itemRepo.findMenuItems(tenantId, branchId, categoryId);
@@ -104,6 +111,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "menuItems", allEntries = true)
     public MenuItem createItem(UUID tenantId, UUID branchId, CreateMenuItemDto dto) {
         Tenant tenant = tenantRepo.findById(tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
@@ -133,6 +141,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "menuItems", allEntries = true)
     public MenuItem updateItem(UUID id, UUID tenantId, UpdateMenuItemDto dto) {
         MenuItem item = getItem(id, tenantId);
 
@@ -157,6 +166,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "menuItems", allEntries = true)
     public Map<String, Boolean> removeItem(UUID id, UUID tenantId) {
         MenuItem item = getItem(id, tenantId);
         item.setIsActive(false);
@@ -172,6 +182,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "menuItems", allEntries = true)
     public MenuItemVariation createVariation(UUID menuItemId, UUID tenantId, MenuItemVariation variation) {
         MenuItem item = getItem(menuItemId, tenantId);
         Tenant tenant = tenantRepo.findById(tenantId)
@@ -185,6 +196,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "menuItems", allEntries = true)
     public MenuItemVariation updateVariation(UUID id, UUID tenantId, MenuItemVariation data) {
         MenuItemVariation v = variationRepo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Variation not found"));
@@ -199,6 +211,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "menuItems", allEntries = true)
     public Map<String, Boolean> removeVariation(UUID id, UUID tenantId) {
         MenuItemVariation v = variationRepo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Variation not found"));
@@ -208,6 +221,7 @@ public class MenuService {
     }
 
     // ── GST Rates ────────────────────────────────────────────────────────────
+
     @Cacheable(value = "gstRates")
     public List<GstRate> getGstRates(UUID tenantId) {
         List<GstRate> rates = gstRepo.findByTenantIdAndIsActiveTrue(tenantId);
@@ -219,6 +233,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "gstRates", allEntries = true)
     public GstRate createGstRate(UUID tenantId, GstRate data) {
         Tenant tenant = tenantRepo.findById(tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
@@ -236,6 +251,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "gstRates", allEntries = true)
     public GstRate updateGstRate(UUID id, UUID tenantId, GstRate data) {
         GstRate gst = gstRepo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "GST rate not found"));
@@ -256,6 +272,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "gstRates", allEntries = true)
     public Map<String, Boolean> removeGstRate(UUID id, UUID tenantId) {
         GstRate gst = gstRepo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "GST rate not found"));
@@ -265,6 +282,7 @@ public class MenuService {
     }
 
     @Transactional
+    @CacheEvict(value = "gstRates", allEntries = true)
     public Map<String, Object> seedDefaultGstRates(UUID tenantId) {
         long count = gstRepo.countByTenantId(tenantId);
         if (count > 0) {

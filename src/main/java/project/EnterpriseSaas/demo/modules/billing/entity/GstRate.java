@@ -1,5 +1,6 @@
 package project.EnterpriseSaas.demo.modules.billing.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import project.EnterpriseSaas.demo.modules.tenant.entity.Tenant;
 import jakarta.persistence.*;
 import lombok.*;
@@ -22,6 +23,7 @@ public class GstRate {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tenant_id", nullable = false)
     private Tenant tenant;
