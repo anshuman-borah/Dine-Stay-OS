@@ -1,6 +1,7 @@
 //
 //package project.EnterpriseSaas.demo.modules.hotel.service;
 //
+//import org.springframework.cache.annotation.CacheEvict;
 //import org.springframework.cache.annotation.Cacheable;
 //import com.fasterxml.jackson.databind.ObjectMapper;
 //import lombok.RequiredArgsConstructor;
@@ -36,6 +37,7 @@
 //import java.time.ZoneId;
 //import java.time.temporal.ChronoUnit;
 //import java.util.*;
+//import java.util.concurrent.CompletableFuture;
 //
 //@Service
 //@RequiredArgsConstructor
@@ -64,6 +66,7 @@
 //    private static final ZoneId HOTEL_ZONE = ZoneId.of("Asia/Kolkata");
 //
 //    @Transactional
+//    @CacheEvict(value = "roomTypes", allEntries = true)
 //    public RoomType createRoomType(UUID tenantId, UUID branchId, CreateRoomTypeDto dto) {
 //        tenantRepo.findById(tenantId)
 //                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
@@ -91,6 +94,7 @@
 //    }
 //
 //    @Transactional
+//    @CacheEvict(value = "roomTypes", allEntries = true)
 //    public RoomType updateRoomType(UUID id, UUID tenantId, Map<String, Object> data) {
 //        RoomType rt = roomTypeRepo.findByIdAndTenantId(id, tenantId)
 //                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "RoomType not found"));
@@ -104,6 +108,7 @@
 //    }
 //
 //    @Transactional
+//    @CacheEvict(value = "roomTypes", allEntries = true)
 //    public void deleteRoomType(UUID id, UUID tenantId) {
 //        RoomType rt = roomTypeRepo.findByIdAndTenantId(id, tenantId)
 //                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "RoomType not found"));
@@ -499,7 +504,6 @@
 //        guest.setTotalStays(guest.getTotalStays() + 1);
 //        guestRepo.save(guest);
 //
-//        // 🟢 FIRE KAFKA EVENT FOR HOUSEKEEPING AND INVENTORY
 //        try {
 //            Map<String, String> event = new HashMap<>();
 //            event.put("reservationId", id.toString());
@@ -534,12 +538,12 @@
 //            room.setStatus(RoomStatus.available);
 //            roomRepo.save(room);
 //        }
-//        // 🟢 FIRE AUDIT EVENT TO KAFKA FOR CANCELLED RESERVATIONS
+//
 //        try {
 //            Map<String, String> auditEvent = new HashMap<>();
 //            auditEvent.put("tenantId", tenantId.toString());
 //            auditEvent.put("branchId", r.getBranchId() != null ? r.getBranchId().toString() : null);
-//            auditEvent.put("userId", userId != null ? userId.toString() : null); // 🟢 Tracks exactly who cancelled it
+//            auditEvent.put("userId", userId != null ? userId.toString() : null);
 //            auditEvent.put("entity", "RESERVATION");
 //            auditEvent.put("entityId", id.toString());
 //            auditEvent.put("action", "CANCEL");
@@ -735,9 +739,17 @@
 //            updateHotelShiftTotals(shift, saved, paymentMethod, amountPaid, advances);
 //        }
 //
-//        // 🟢 FINALLY FIRE THE EMAIL HERE!
+//        // 🟢 ASYNC EMAIL: Returns instantly while email sends in background!
 //        if (r.getPrimaryGuest().getEmail() != null && !r.getPrimaryGuest().getEmail().isBlank()) {
-//            emailService.sendReceipt(r.getPrimaryGuest().getEmail(), saved);
+//            final Bill finalSaved = saved;
+//            CompletableFuture.runAsync(() -> {
+//                try {
+//                    emailService.sendReceipt(r.getPrimaryGuest().getEmail(), finalSaved);
+//                    log.info("Receipt emailed asynchronously to {}", r.getPrimaryGuest().getEmail());
+//                } catch (Exception e) {
+//                    log.error("Background email failed: {}", e.getMessage());
+//                }
+//            });
 //        }
 //
 //        return saved;
@@ -1057,7 +1069,6 @@
 //        return saved;
 //    }
 //
-//    // 🟢 NEW: Called by the HotelKafkaConsumer when the POS sends a RoomChargeEvent
 //    @Transactional
 //    public void chargeToRoomFolio(UUID tenantId, UUID branchId, String roomNumber, BigDecimal amount, String orderNumber) {
 //        Room room = roomRepo.findByTenantIdAndBranchIdAndRoomNumber(tenantId, branchId, roomNumber)
@@ -1122,8 +1133,12 @@
 //        );
 //    }
 //}
+
 package project.EnterpriseSaas.demo.modules.hotel.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -1151,6 +1166,9 @@ import project.EnterpriseSaas.demo.modules.hotel.repository.*;
 import project.EnterpriseSaas.demo.modules.shift.entity.Shift;
 import project.EnterpriseSaas.demo.modules.shift.repository.ShiftRepository;
 import project.EnterpriseSaas.demo.modules.tenant.repository.TenantRepository;
+import project.EnterpriseSaas.demo.modules.hotel.kafka.HotelCheckoutConsumer;
+import project.EnterpriseSaas.demo.modules.audit.service.AuditService;
+import project.EnterpriseSaas.demo.modules.audit.entity.AuditLog;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -1182,19 +1200,28 @@ public class HotelService {
     private final JdbcTemplate jdbcTemplate;
     private final EmailService emailService;
 
-    // 🟢 KAFKA INJECTIONS
+    // 🟢 INJECTIONS
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+
+    @Value("${app.kafka.enabled:false}")
+    private boolean kafkaEnabled;
+
+    @Autowired
+    @Lazy // Resolves circular dependencies safely
+    private HotelCheckoutConsumer hotelCheckoutConsumer;
+
+    @Autowired
+    @Lazy
+    private AuditService auditService;
 
     private static final ZoneId HOTEL_ZONE = ZoneId.of("Asia/Kolkata");
 
     @Transactional
     @CacheEvict(value = "roomTypes", allEntries = true)
     public RoomType createRoomType(UUID tenantId, UUID branchId, CreateRoomTypeDto dto) {
-        tenantRepo.findById(tenantId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
-        branchRepo.findById(branchId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
+        tenantRepo.findById(tenantId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
+        branchRepo.findById(branchId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
 
         RoomType rt = RoomType.builder()
                 .tenantId(tenantId)
@@ -1628,17 +1655,23 @@ public class HotelService {
         guestRepo.save(guest);
 
         try {
-            Map<String, String> event = new HashMap<>();
-            event.put("reservationId", id.toString());
-            event.put("roomId", room.getId().toString());
-            event.put("tenantId", tenantId.toString());
-            event.put("branchId", r.getBranchId().toString());
+            // 🟢 CHECKOUT TOGGLE
+            if (kafkaEnabled) {
+                Map<String, String> event = new HashMap<>();
+                event.put("reservationId", id.toString());
+                event.put("roomId", room.getId().toString());
+                event.put("tenantId", tenantId.toString());
+                event.put("branchId", r.getBranchId().toString());
 
-            String message = objectMapper.writeValueAsString(event);
-            kafkaTemplate.send("hotel-checkouts", message);
-            log.info("🚀 [API] Fired ReservationCheckedOutEvent to Kafka for Reservation: {}", id);
+                String message = objectMapper.writeValueAsString(event);
+                kafkaTemplate.send("hotel-checkouts", message);
+                log.info("🚀 [API] Fired ReservationCheckedOutEvent to Kafka for Reservation: {}", id);
+            } else {
+                hotelCheckoutConsumer.processCheckoutAsync(tenantId, r.getBranchId(), room.getId(), id);
+                log.info("⚡ [API] Kafka disabled - executed Direct Async Checkout tasks for Reservation {}", id);
+            }
         } catch (Exception e) {
-            log.error("Failed to push checkout event to Kafka", e);
+            log.error("Failed to process checkout tasks", e);
         }
 
         return r;
@@ -1663,19 +1696,36 @@ public class HotelService {
         }
 
         try {
-            Map<String, String> auditEvent = new HashMap<>();
-            auditEvent.put("tenantId", tenantId.toString());
-            auditEvent.put("branchId", r.getBranchId() != null ? r.getBranchId().toString() : null);
-            auditEvent.put("userId", userId != null ? userId.toString() : null);
-            auditEvent.put("entity", "RESERVATION");
-            auditEvent.put("entityId", id.toString());
-            auditEvent.put("action", "CANCEL");
-            auditEvent.put("metadata", "Cancel Reason: " + reason + " | Room: " + room.getRoomNumber());
+            // 🟢 AUDIT LOG TOGGLE
+            if (kafkaEnabled) {
+                Map<String, String> auditEvent = new HashMap<>();
+                auditEvent.put("tenantId", tenantId.toString());
+                auditEvent.put("branchId", r.getBranchId() != null ? r.getBranchId().toString() : null);
+                auditEvent.put("userId", userId != null ? userId.toString() : null);
+                auditEvent.put("entity", "RESERVATION");
+                auditEvent.put("entityId", id.toString());
+                auditEvent.put("action", "CANCEL");
+                auditEvent.put("metadata", "Cancel Reason: " + reason + " | Room: " + room.getRoomNumber());
 
-            kafkaTemplate.send("audit-logs", objectMapper.writeValueAsString(auditEvent));
-            log.info("🚀 [API] Fired AuditEvent to Kafka for cancelled reservation {}", id);
+                kafkaTemplate.send("audit-logs", objectMapper.writeValueAsString(auditEvent));
+                log.info("🚀 [API] Fired AuditEvent to Kafka for cancelled reservation {}", id);
+            } else {
+                AuditLog audit = AuditLog.builder()
+                        .tenantId(tenantId)
+                        .branchId(r.getBranchId())
+                        .userId(userId)
+                        .entity("RESERVATION")
+                        .entityId(id.toString())
+                        .action("CANCEL")
+                        .metadata(Map.of("details", "Cancel Reason: " + reason + " | Room: " + room.getRoomNumber()))
+                        .ipAddress("API-FALLBACK")
+                        .userAgent("SYSTEM")
+                        .build();
+                auditService.log(audit);
+                log.info("⚡ [API] Kafka disabled - executed Direct Async Audit Log for cancelled reservation {}", id);
+            }
         } catch (Exception e) {
-            log.error("Failed to push audit event to Kafka", e);
+            log.error("Failed to log audit event", e);
         }
 
         return r;
@@ -1862,7 +1912,6 @@ public class HotelService {
             updateHotelShiftTotals(shift, saved, paymentMethod, amountPaid, advances);
         }
 
-        // 🟢 ASYNC EMAIL: Returns instantly while email sends in background!
         if (r.getPrimaryGuest().getEmail() != null && !r.getPrimaryGuest().getEmail().isBlank()) {
             final Bill finalSaved = saved;
             CompletableFuture.runAsync(() -> {

@@ -342,7 +342,7 @@ public class InventoryService {
         return itemRepo.findLowStockItems(tenantId, branchId);
     }
 
-    // 🟢 NEW: Deduct minibar inventory automatically during Kafka checkout
+    // 🟢 NEW: Deduct minibar inventory automatically during checkout
     @Transactional
     public void deductMinibarItems(UUID tenantId, UUID branchId, List<project.EnterpriseSaas.demo.modules.hotel.entity.FolioCharge> charges) {
         for (project.EnterpriseSaas.demo.modules.hotel.entity.FolioCharge charge : charges) {
