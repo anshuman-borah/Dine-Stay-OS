@@ -304,7 +304,7 @@ public class AdminService {
         return Map.of("id", tenantId, "name", name, "slug", slug, "email", email, "branchId", branchId);
     }
 
-    // ── Delete Tenant (Massive Bottom-Up Cascade) ────────────────────────────
+    // ── Delete Tenant (Strict Topological Sort Cascade) ──────────────────────
 
     @Transactional
     public void deleteTenant(UUID id) {
@@ -322,39 +322,57 @@ public class AdminService {
         }
 
         try {
-            // 1. Deeply nested dependencies that might not have tenant_id
-            try { jdbcTemplate.update("DELETE FROM hotel_folio_charges WHERE reservation_id IN (SELECT id FROM hotel_reservations WHERE tenant_id = ?)", id); } catch (Exception ignored) {}
-            try { jdbcTemplate.update("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = ?)", id); } catch (Exception ignored) {}
-            try { jdbcTemplate.update("DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = ?)", id); } catch (Exception ignored) {}
-
-            // 2. Child Transaction Records
-            safeDelete(id, "order_items"); // Just in case it has tenant_id directly!
-            safeDelete(id, "payments");
-            safeDelete(id, "hotel_housekeeping_tasks");
-            safeDelete(id, "hotel_reservations");
-            safeDelete(id, "hotel_rooms");
+            // Level 1: Deepest leaf nodes (No dependencies)
+            jdbcTemplate.update("DELETE FROM shift_denominations WHERE shift_id IN (SELECT id FROM shifts WHERE tenant_id = ?)", id);
+            jdbcTemplate.update("DELETE FROM audit_logs WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM password_reset_tokens WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM hotel_folio_charges WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM hotel_housekeeping_tasks WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM inventory_transactions WHERE tenant_id = ?", id);
             
-            safeDelete(id, "orders");
-            safeDelete(id, "bills");
-            safeDelete(id, "shifts");
-
-            // 3. Master Data
-            safeDelete(id, "inventory_items");
-            safeDelete(id, "menu_items");
-            safeDelete(id, "categories");
-
-            // 4. Security & Logs
-            safeDelete(id, "audit_logs");
-            safeDelete(id, "password_reset_tokens");
+            // Level 2: Financial records
+            jdbcTemplate.update("DELETE FROM payments WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM menu_item_modifiers WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM menu_item_addons WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM order_items WHERE tenant_id = ?", id);
             
-            // 5. Core Infrastructure
-            safeDelete(id, "users");
-            safeDelete(id, "branches");
-            safeDelete(id, "subscriptions");
-
-            // 6. Final Execution
-            String deleteSql = "DELETE FROM tenants WHERE id = ?";
-            jdbcTemplate.update(deleteSql, id);
+            // Level 3: Master operational records
+            jdbcTemplate.update("DELETE FROM bills WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM hotel_reservations WHERE tenant_id = ?", id);
+            
+            // Level 4: Parent operational records
+            jdbcTemplate.update("DELETE FROM orders WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM hotel_guests WHERE tenant_id = ?", id);
+            
+            // Level 5: Core structural records
+            jdbcTemplate.update("DELETE FROM shifts WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM tables WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM hotel_rooms WHERE tenant_id = ?", id);
+            
+            // Level 6: Section and Type records
+            jdbcTemplate.update("DELETE FROM table_sections WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM hotel_room_types WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM menu_item_variations WHERE tenant_id = ?", id);
+            
+            // Level 7: Grouping records
+            jdbcTemplate.update("DELETE FROM modifiers WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM modifier_groups WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM addons WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM addon_groups WHERE tenant_id = ?", id);
+            
+            // Level 8: Product records
+            jdbcTemplate.update("DELETE FROM menu_items WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM categories WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM gst_rates WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM inventory_items WHERE tenant_id = ?", id);
+            
+            // Level 9: Tenant infrastructure
+            jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM subscriptions WHERE tenant_id = ?", id);
+            jdbcTemplate.update("DELETE FROM branches WHERE tenant_id = ?", id);
+            
+            // Final Execution
+            jdbcTemplate.update("DELETE FROM tenants WHERE id = ?", id);
             
         } catch (Exception e) {
             log.error("Failed to delete tenant {}: {}", id, e.getMessage(), e);
@@ -362,16 +380,6 @@ public class AdminService {
                     HttpStatus.INTERNAL_SERVER_ERROR, 
                     "Database prevented deletion. Attached records might still exist. Error: " + e.getMessage()
             );
-        }
-    }
-
-    // 🟢 BULLETPROOF HELPER: Checks if the table AND the tenant_id column exist before executing!
-    private void safeDelete(UUID tenantId, String tableName) {
-        String check = "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_name = ? AND column_name = 'tenant_id')";
-        Boolean exists = jdbcTemplate.queryForObject(check, Boolean.class, tableName);
-        
-        if (Boolean.TRUE.equals(exists)) {
-            jdbcTemplate.update("DELETE FROM " + tableName + " WHERE tenant_id = ?", tenantId);
         }
     }
 
