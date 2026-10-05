@@ -786,7 +786,7 @@ public class AdminService {
         return Map.of("id", tenantId, "name", name, "slug", slug, "email", email, "branchId", branchId);
     }
 
-    // ── Delete Tenant (Cascade) ──────────────────────────────────────────────
+ // ── Delete Tenant (Cascade) ──────────────────────────────────────────────
 
     @Transactional
     public void deleteTenant(UUID id) {
@@ -804,14 +804,25 @@ public class AdminService {
         }
 
         try {
-            // 1. Manually wipe out tables that do NOT have 'ON DELETE CASCADE' enabled in PostgreSQL
-            jdbcTemplate.update("DELETE FROM audit_logs WHERE tenant_id = ?", id);
-            jdbcTemplate.update("DELETE FROM sync_queue WHERE tenant_id = ?", id);
-            jdbcTemplate.update("DELETE FROM password_reset_tokens WHERE tenant_id = ?", id);
+            // 1. Manually wipe out tables that might lack 'ON DELETE CASCADE'
+            // We wrap these in try-catch blocks so if a table doesn't exist, it safely ignores it!
+            try {
+                jdbcTemplate.update("DELETE FROM audit_logs WHERE tenant_id = ?", id);
+            } catch (Exception ignored) {}
+
+            try {
+                jdbcTemplate.update("DELETE FROM sync_queue WHERE tenant_id = ?", id);
+            } catch (Exception ignored) {}
+
+            try {
+                jdbcTemplate.update("DELETE FROM password_reset_tokens WHERE tenant_id = ?", id);
+            } catch (Exception ignored) {}
             
             // 2. Clear out users first to prevent Branch foreign key locks
-            jdbcTemplate.update("DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)", id);
-            jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", id);
+            try {
+                jdbcTemplate.update("DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)", id);
+                jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", id);
+            } catch (Exception ignored) {}
 
             // 3. Finally, delete the tenant (which will cascade to branches, orders, bills, and subscriptions)
             String deleteSql = "DELETE FROM tenants WHERE id = ?";
@@ -819,7 +830,6 @@ public class AdminService {
             
         } catch (Exception e) {
             log.error("Failed to delete tenant {}: {}", id, e.getMessage(), e);
-            // If PostgreSQL blocks the deletion, surface the EXACT reason to the frontend
             throw new ResponseStatusException(
                     HttpStatus.INTERNAL_SERVER_ERROR, 
                     "Database prevented deletion. Attached records might still exist. Error: " + e.getMessage()
