@@ -327,13 +327,12 @@ public class AdminService {
         }
 
         try {
-            // 1. Safely wipe out tables that might not exist without tainting the transaction!
+            // 1. Safely wipe out tables that might not exist without tainting the transaction
             safeDelete(id, "audit_logs");
             safeDelete(id, "sync_queue");
             safeDelete(id, "password_reset_tokens");
             
-            // 2. Clear out users first to prevent Branch foreign key locks
-            jdbcTemplate.update("DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)", id);
+            // 2. Clear out users first to prevent foreign key locks (No user_branches table exists!)
             jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", id);
 
             // 3. Finally, delete the tenant (which will cascade to branches, orders, bills, and subscriptions)
