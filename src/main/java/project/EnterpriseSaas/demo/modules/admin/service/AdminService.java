@@ -30,11 +30,9 @@ public class AdminService {
         String sqlTenants = "SELECT COUNT(*) AS total, SUM(CASE WHEN is_active THEN 1 ELSE 0 END) AS active FROM tenants WHERE slug != '_system'";
         Map<String, Object> tenantsMap = jdbcTemplate.queryForMap(sqlTenants);
 
-        // 🟢 FIX: Filter by 'billed' status so draft/cancelled orders aren't counted globally
         String sqlOrders = "SELECT COUNT(*)::int AS total FROM orders WHERE status = 'billed' AND created_at >= NOW() - INTERVAL '30 days'";
         Integer ordersTotal = jdbcTemplate.queryForObject(sqlOrders, Integer.class);
 
-        // 🟢 FIX: Correct timezone to Asia/Kolkata + subtract folio deductions for perfectly accurate MRR
         String sqlRevenue = """
             WITH valid_bills AS (
                 SELECT COALESCE(SUM(grand_total), 0) AS val
@@ -52,7 +50,6 @@ public class AdminService {
         """;
         BigDecimal mrr = jdbcTemplate.queryForObject(sqlRevenue, BigDecimal.class);
 
-        // 🟢 FIX: Correctly bound the current day by the IST timezone and billed status
         String sqlActiveToday = "SELECT COUNT(DISTINCT tenant_id)::int AS count FROM orders WHERE status = 'billed' AND created_at AT TIME ZONE 'Asia/Kolkata' >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Kolkata')";
         Integer activeToday = jdbcTemplate.queryForObject(sqlActiveToday, Integer.class);
 
@@ -90,7 +87,6 @@ public class AdminService {
         boolean hasSearch = search != null && !search.isBlank();
         String searchClause = hasSearch ? "AND (t.name ILIKE ? OR t.email ILIKE ? OR t.slug ILIKE ?)" : "";
 
-        // 🟢 FIX: Only count billed orders in the tenant list
         String sqlData = String.format("""
             SELECT
               t.id, t.name, t.slug, t.email, t.phone, t.address_line1 AS address,
@@ -144,7 +140,6 @@ public class AdminService {
     // ── Tenant Details ───────────────────────────────────────────────────────
 
     public Map<String, Object> getTenant(UUID id) {
-        // 🟢 FIX: Clean total_orders and folio-deducted total_revenue on the individual tenant detail page
         String sql = """
             SELECT
               t.id, t.name, t.slug, t.email, t.phone, t.gstin, t.address_line1 AS address,
@@ -292,7 +287,7 @@ public class AdminService {
             jdbcTemplate.update(sqlSub, subscriptionId, tenantId, plan.getId());
         }
 
-        // 4. Create Owner Account if Credentials Provided
+        // 4. Create Owner Account
         if (dto.containsKey("ownerName") && dto.containsKey("ownerPassword")) {
             String ownerName = (String) dto.get("ownerName");
             String ownerPassword = (String) dto.get("ownerPassword");
@@ -309,7 +304,7 @@ public class AdminService {
         return Map.of("id", tenantId, "name", name, "slug", slug, "email", email, "branchId", branchId);
     }
 
-    // ── Delete Tenant (Cascade) ──────────────────────────────────────────────
+    // ── Delete Tenant (Massive Bottom-Up Cascade) ────────────────────────────
 
     @Transactional
     public void deleteTenant(UUID id) {
@@ -327,15 +322,37 @@ public class AdminService {
         }
 
         try {
-            // 1. Safely wipe out tables that might not exist without tainting the transaction
+            // 1. Deeply nested dependencies that might not have tenant_id
+            try { jdbcTemplate.update("DELETE FROM hotel_folio_charges WHERE reservation_id IN (SELECT id FROM hotel_reservations WHERE tenant_id = ?)", id); } catch (Exception ignored) {}
+            try { jdbcTemplate.update("DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = ?)", id); } catch (Exception ignored) {}
+            try { jdbcTemplate.update("DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = ?)", id); } catch (Exception ignored) {}
+
+            // 2. Child Transaction Records
+            safeDelete(id, "order_items"); // Just in case it has tenant_id directly!
+            safeDelete(id, "payments");
+            safeDelete(id, "hotel_housekeeping_tasks");
+            safeDelete(id, "hotel_reservations");
+            safeDelete(id, "hotel_rooms");
+            
+            safeDelete(id, "orders");
+            safeDelete(id, "bills");
+            safeDelete(id, "shifts");
+
+            // 3. Master Data
+            safeDelete(id, "inventory_items");
+            safeDelete(id, "menu_items");
+            safeDelete(id, "categories");
+
+            // 4. Security & Logs
             safeDelete(id, "audit_logs");
-            safeDelete(id, "sync_queue");
             safeDelete(id, "password_reset_tokens");
             
-            // 2. Clear out users first to prevent foreign key locks (No user_branches table exists!)
-            jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", id);
+            // 5. Core Infrastructure
+            safeDelete(id, "users");
+            safeDelete(id, "branches");
+            safeDelete(id, "subscriptions");
 
-            // 3. Finally, delete the tenant (which will cascade to branches, orders, bills, and subscriptions)
+            // 6. Final Execution
             String deleteSql = "DELETE FROM tenants WHERE id = ?";
             jdbcTemplate.update(deleteSql, id);
             
@@ -348,13 +365,12 @@ public class AdminService {
         }
     }
 
-    // 🟢 HELPER: Safely checks if a table exists before deleting to protect the transaction
+    // 🟢 BULLETPROOF HELPER: Checks if the table AND the tenant_id column exist before executing!
     private void safeDelete(UUID tenantId, String tableName) {
-        String check = "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = ?)";
+        String check = "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_name = ? AND column_name = 'tenant_id')";
         Boolean exists = jdbcTemplate.queryForObject(check, Boolean.class, tableName);
         
         if (Boolean.TRUE.equals(exists)) {
-            // Safe to delete since the table actually exists
             jdbcTemplate.update("DELETE FROM " + tableName + " WHERE tenant_id = ?", tenantId);
         }
     }
@@ -364,7 +380,6 @@ public class AdminService {
     public Map<String, Object> getRecentActivity(int limit) {
         String sql = """
             SELECT * FROM (
-                -- 1. Get New Tenant Registrations
                 SELECT 
                     'tenant_registered' AS event_type, 
                     id::text AS id, 
@@ -377,7 +392,6 @@ public class AdminService {
 
                 UNION ALL
 
-                -- 2. Get New Orders Placed
                 SELECT 
                     'order_created' AS event_type, 
                     o.id::text AS id, 
@@ -393,18 +407,12 @@ public class AdminService {
             LIMIT ?
         """;
 
-        List<Map<String, Object>> feed = jdbcTemplate.queryForList(sql, limit);
-
-        return Map.of(
-                "data", feed,
-                "total", feed.size()
-        );
+        return Map.of("data", jdbcTemplate.queryForList(sql, limit), "total", jdbcTemplate.queryForList(sql, limit).size());
     }
 
     // ── Chart Trends (Daily Orders & Signups) ────────────────────────────────
 
     public List<Map<String, Object>> getOrdersTrend() {
-        // Group by IST so midnight cutoffs match frontend completely, only count billed orders
         String sql = """
             SELECT
               TO_CHAR(DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Kolkata'), 'DD Mon') AS date,
@@ -420,7 +428,6 @@ public class AdminService {
     }
 
     public List<Map<String, Object>> getSignupsTrend() {
-        // 🟢 FIX: Group signups by IST
         String sql = """
             SELECT
               TO_CHAR(DATE_TRUNC('day', created_at AT TIME ZONE 'Asia/Kolkata'), 'DD Mon') AS date,
