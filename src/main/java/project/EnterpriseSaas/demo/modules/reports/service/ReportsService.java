@@ -837,6 +837,7 @@
 //         );
 //     }
 // }
+
 package project.EnterpriseSaas.demo.modules.reports.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -1377,124 +1378,7 @@ public class ReportsService {
     // ── Executive Owner Dashboard Summary ──────────────────────────────────────
 
     public Map<String, Object> getOwnerDashboardSummary(UUID branchId, UUID tenantId) {
-        String today = LocalDate.now().toString();
-        OffsetDateTime dayStart = toStartOfDay(today);
-        OffsetDateTime dayEnd = toEndOfDay(today);
-
-        String sqlTotalToday = "SELECT COALESCE(SUM(grand_total), 0) AS revenue, COUNT(*) AS bills FROM bills WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status NOT IN ('void', 'refunded') AND created_at BETWEEN ? AND ?";
-        Map<String, Object> totalToday = jdbcTemplate.queryForMap(sqlTotalToday, tenantId, dayStart, dayEnd);
-
-        String sqlTotalWeek = "SELECT COALESCE(SUM(grand_total), 0) AS revenue FROM bills WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status NOT IN ('void', 'refunded') AND created_at >= NOW() - INTERVAL '7 days'";
-        BigDecimal totalWeek = jdbcTemplate.queryForObject(sqlTotalWeek, BigDecimal.class, tenantId);
-
-        String sqlPosToday = "SELECT COALESCE(SUM(grand_total), 0) AS revenue, COUNT(*) AS bills FROM bills WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND (source = 'pos' OR source IS NULL) AND status NOT IN ('void', 'refunded') AND created_at BETWEEN ? AND ?";
-        Map<String, Object> posToday = jdbcTemplate.queryForMap(sqlPosToday, tenantId, dayStart, dayEnd);
-
-        String sqlHotelToday = "SELECT COALESCE(SUM(grand_total), 0) AS revenue, COUNT(*) AS bills FROM bills WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND source = 'hotel' AND status NOT IN ('void', 'refunded') AND created_at BETWEEN ? AND ?";
-        Map<String, Object> hotelToday = jdbcTemplate.queryForMap(sqlHotelToday, tenantId, dayStart, dayEnd);
-
-        // 🟢 FIX: Deduct double-counted POS transfers from overall & hotel revenue
-        String sqlFolioToday = "SELECT COALESCE(SUM(fc.amount),0) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id WHERE r.tenant_id = ? " + getBranchClause(branchId, "r.") + " AND fc.description LIKE 'Restaurant POS Order %' AND fc.created_at BETWEEN ? AND ?";
-        BigDecimal folioToday = jdbcTemplate.queryForObject(sqlFolioToday, BigDecimal.class, tenantId, dayStart, dayEnd);
-
-        String sqlFolioWeek = "SELECT COALESCE(SUM(fc.amount),0) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id WHERE r.tenant_id = ? " + getBranchClause(branchId, "r.") + " AND fc.description LIKE 'Restaurant POS Order %' AND fc.created_at >= NOW() - INTERVAL '7 days'";
-        BigDecimal folioWeek = jdbcTemplate.queryForObject(sqlFolioWeek, BigDecimal.class, tenantId);
-
-        BigDecimal revenueTodayClean = new BigDecimal(totalToday.getOrDefault("revenue", 0).toString()).subtract(folioToday);
-        BigDecimal hotelRevTodayClean = new BigDecimal(hotelToday.getOrDefault("revenue", 0).toString()).subtract(folioToday);
-        BigDecimal totalWeekClean = (totalWeek != null ? totalWeek : BigDecimal.ZERO).subtract(folioWeek);
-
-        String sqlPending = "SELECT COUNT(*) AS count FROM orders WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status NOT IN ('billed', 'cancelled')";
-        Long pending = jdbcTemplate.queryForObject(sqlPending, Long.class, tenantId);
-
-        String sqlRoomsCount = "SELECT COUNT(*) FROM hotel_rooms WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status != 'out_of_order'";
-        Long totalRooms = jdbcTemplate.queryForObject(sqlRoomsCount, Long.class, tenantId);
-
-        String sqlOccupiedCount = "SELECT COUNT(*) FROM hotel_reservations WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status = 'checked_in'";
-        Long occupiedRooms = jdbcTemplate.queryForObject(sqlOccupiedCount, Long.class, tenantId);
-
-        String sqlCheckins = "SELECT COUNT(*) AS count FROM hotel_reservations WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND check_in_date = ? AND status NOT IN ('cancelled', 'no_show')";
-        Long checkins = jdbcTemplate.queryForObject(sqlCheckins, Long.class, tenantId, LocalDate.now());
-
-        String sqlCheckouts = "SELECT COUNT(*) AS count FROM hotel_reservations WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND check_out_date = ? AND status NOT IN ('cancelled', 'no_show')";
-        Long checkouts = jdbcTemplate.queryForObject(sqlCheckouts, Long.class, tenantId, LocalDate.now());
-
-        // 🟢 FIX: Deduct double-counted POS transfers from the charts
-        String sqlWeeklyChart = """
-            SELECT 
-               TO_CHAR(date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata'), 'Mon DD') AS date, 
-               COALESCE(SUM(b.grand_total) FILTER (WHERE b.source='pos' OR b.source IS NULL), 0) AS pos, 
-               COALESCE(SUM(b.grand_total) FILTER (WHERE b.source='hotel'), 0) - COALESCE(
-                   (SELECT SUM(fc.amount) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id 
-                    WHERE r.tenant_id = b.tenant_id AND date_trunc('day', fc.created_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata')
-                    AND fc.description LIKE 'Restaurant POS Order %'), 0) AS hotel, 
-               COALESCE(SUM(b.grand_total), 0) - COALESCE(
-                   (SELECT SUM(fc.amount) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id 
-                    WHERE r.tenant_id = b.tenant_id AND date_trunc('day', fc.created_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata')
-                    AND fc.description LIKE 'Restaurant POS Order %'), 0) AS total 
-            FROM bills b
-            WHERE b.tenant_id = ? """ + getBranchClause(branchId, "b.") + """
-              AND b.status NOT IN ('void', 'refunded') 
-              AND b.created_at >= NOW() - INTERVAL '7 days' 
-            GROUP BY date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata'), b.tenant_id
-            ORDER BY date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata') ASC
-        """;
-        List<Map<String, Object>> weeklyChart = jdbcTemplate.queryForList(sqlWeeklyChart, tenantId);
-
-        String sqlPayments = "SELECT method, COALESCE(SUM(amount),0) AS total FROM payments WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status='success' AND created_at BETWEEN ? AND ? GROUP BY method ORDER BY total DESC";
-        List<Map<String, Object>> paymentBreakdown = jdbcTemplate.queryForList(sqlPayments, tenantId, dayStart, dayEnd);
-
-        String sqlLowStock = "SELECT COUNT(*) AS count FROM inventory_items WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND current_stock <= min_stock_level AND is_active = true";
-        Long lowStock = jdbcTemplate.queryForObject(sqlLowStock, Long.class, tenantId);
-
-        List<Map<String, Object>> branchComparison = List.of();
-        if (branchId == null) {
-            String sqlCompare = """
-                WITH prev_bills AS (
-                    SELECT branch_id, COALESCE(SUM(grand_total), 0) AS raw_revenue
-                    FROM bills
-                    WHERE tenant_id = ? AND status NOT IN ('void','refunded') AND created_at >= NOW() - INTERVAL '7 days'
-                    GROUP BY branch_id
-                ),
-                prev_folios AS (
-                    SELECT r.branch_id, COALESCE(SUM(fc.amount), 0) AS deduction
-                    FROM hotel_folio_charges fc
-                    JOIN hotel_reservations r ON r.id = fc.reservation_id
-                    WHERE r.tenant_id = ? AND fc.description LIKE 'Restaurant POS Order %' AND fc.created_at >= NOW() - INTERVAL '7 days'
-                    GROUP BY r.branch_id
-                )
-                SELECT b.name AS branch_name, COALESCE(pb.raw_revenue, 0) - COALESCE(pf.deduction, 0) AS revenue
-                FROM branches b
-                LEFT JOIN prev_bills pb ON pb.branch_id = b.id
-                LEFT JOIN prev_folios pf ON pf.branch_id = b.id
-                WHERE b.tenant_id = ? AND b.is_active = true
-                ORDER BY revenue DESC
-            """;
-            branchComparison = jdbcTemplate.queryForList(sqlCompare, tenantId, tenantId, tenantId);
-        }
-
-        long tRooms = totalRooms != null ? totalRooms : 0;
-        long oRooms = occupiedRooms != null ? occupiedRooms : 0;
-        long occupancyRate = tRooms > 0 ? Math.round(((double) oRooms / tRooms) * 100) : 0;
-
-        Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("totalRevenueToday", revenueTodayClean);
-        summary.put("totalBillsToday", totalToday.getOrDefault("bills", 0));
-        summary.put("totalRevenueWeek", totalWeekClean);
-        summary.put("posRevenueToday", posToday.getOrDefault("revenue", 0));
-        summary.put("posBillsToday", posToday.getOrDefault("bills", 0));
-        summary.put("hotelRevenueToday", hotelRevTodayClean);
-        summary.put("hotelBillsToday", hotelToday.getOrDefault("bills", 0));
-        summary.put("pendingOrders", pending != null ? pending : 0);
-        summary.put("occupancyRate", occupancyRate);
-        summary.put("todayCheckins", checkins != null ? checkins : 0);
-        summary.put("todayCheckouts", checkouts != null ? checkouts : 0);
-        summary.put("lowStockAlerts", lowStock != null ? lowStock : 0);
-        summary.put("weeklyChart", weeklyChart);
-        summary.put("paymentBreakdown", paymentBreakdown);
-        summary.put("branchComparison", branchComparison);
-
-        return summary;
+        return getBranchSummary(branchId, tenantId, LocalDate.now().minusDays(7).toString(), LocalDate.now().toString());
     }
 
     // ── Cross-Branch Performance (Owner Only) ──────────────────────────────────
@@ -1516,7 +1400,6 @@ public class ReportsService {
         String sqlBranches = "SELECT id, name, code, type, city, is_hq FROM branches WHERE tenant_id = ? AND is_active = true ORDER BY is_hq DESC, name ASC";
         List<Map<String, Object>> branches = jdbcTemplate.queryForList(sqlBranches, tenantId);
 
-        // 🟢 FIX: Used CTEs to completely eliminate the Cartesian Join multiplier bug!
         String sqlCurrent = """
             WITH branch_bills AS (
                 SELECT branch_id, 
@@ -1663,7 +1546,6 @@ public class ReportsService {
         String sqlHotelToday = "SELECT COALESCE(SUM(grand_total),0) AS revenue, COUNT(*)::int AS bills FROM bills WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND source='hotel' AND status NOT IN ('void','refunded') AND created_at BETWEEN ? AND ?";
         Map<String, Object> hotelToday = jdbcTemplate.queryForMap(sqlHotelToday, tenantId, rangeStart, rangeEnd);
 
-        // 🟢 FIX: Deduct double-counted POS transfers from overall & hotel revenue
         String sqlFolioRange = "SELECT COALESCE(SUM(fc.amount),0) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id WHERE r.tenant_id = ? " + getBranchClause(branchId, "r.") + " AND fc.description LIKE 'Restaurant POS Order %' AND fc.created_at BETWEEN ? AND ?";
         BigDecimal folioRange = jdbcTemplate.queryForObject(sqlFolioRange, BigDecimal.class, tenantId, rangeStart, rangeEnd);
         
@@ -1702,25 +1584,63 @@ public class ReportsService {
         String sqlPayments = "SELECT method, COALESCE(SUM(amount),0) AS total, COUNT(*)::int AS txns FROM payments WHERE tenant_id = ? " + getBranchClause(branchId, "") + " AND status='success' AND created_at BETWEEN ? AND ? GROUP BY method ORDER BY total DESC";
         List<Map<String, Object>> paymentBreakdown = jdbcTemplate.queryForList(sqlPayments, tenantId, rangeStart, rangeEnd);
 
-        // 🟢 FIX: Same Folio subtraction applied to the Branch Dashboard Chart
+        // 🟢 THE BULLETPROOF FIX: Safely groups daily charts using CTEs
         String sqlWeeklyChart = """
-            SELECT TO_CHAR(date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata'), 'Mon DD') AS date, 
-                   COALESCE(SUM(b.grand_total) FILTER (WHERE b.source='pos' OR b.source IS NULL), 0) AS pos, 
-                   COALESCE(SUM(b.grand_total) FILTER (WHERE b.source='hotel'), 0) - COALESCE(
-                       (SELECT SUM(fc.amount) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id 
-                        WHERE r.tenant_id = b.tenant_id AND date_trunc('day', fc.created_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata')
-                        AND fc.description LIKE 'Restaurant POS Order %'), 0) AS hotel, 
-                   COALESCE(SUM(b.grand_total), 0) - COALESCE(
-                       (SELECT SUM(fc.amount) FROM hotel_folio_charges fc JOIN hotel_reservations r ON r.id = fc.reservation_id 
-                        WHERE r.tenant_id = b.tenant_id AND date_trunc('day', fc.created_at AT TIME ZONE 'Asia/Kolkata') = date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata')
-                        AND fc.description LIKE 'Restaurant POS Order %'), 0) AS total 
-            FROM bills b
-            WHERE b.tenant_id = ? """ + getBranchClause(branchId, "b.") + """
-              AND b.status NOT IN ('void','refunded') AND b.created_at BETWEEN ? AND ? 
-            GROUP BY date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata'), b.tenant_id 
-            ORDER BY date_trunc('day', b.created_at AT TIME ZONE 'Asia/Kolkata') ASC
+            WITH daily_bills AS (
+                SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Kolkata') AS day_date,
+                       COALESCE(SUM(grand_total) FILTER (WHERE source='pos' OR source IS NULL), 0) AS pos,
+                       COALESCE(SUM(grand_total) FILTER (WHERE source='hotel'), 0) AS hotel,
+                       COALESCE(SUM(grand_total), 0) AS total
+                FROM bills
+                WHERE tenant_id = ? """ + getBranchClause(branchId, "") + """
+                  AND status NOT IN ('void','refunded') AND created_at BETWEEN ? AND ?
+                GROUP BY day_date
+            ),
+            daily_folios AS (
+                SELECT date_trunc('day', fc.created_at AT TIME ZONE 'Asia/Kolkata') AS day_date,
+                       COALESCE(SUM(fc.amount), 0) AS deduction
+                FROM hotel_folio_charges fc
+                JOIN hotel_reservations r ON r.id = fc.reservation_id
+                WHERE r.tenant_id = ? """ + getBranchClause(branchId, "r.") + """
+                  AND fc.description LIKE 'Restaurant POS Order %' AND fc.created_at BETWEEN ? AND ?
+                GROUP BY day_date
+            )
+            SELECT TO_CHAR(b.day_date, 'Mon DD') AS date,
+                   b.pos,
+                   b.hotel - COALESCE(f.deduction, 0) AS hotel,
+                   b.total - COALESCE(f.deduction, 0) AS total
+            FROM daily_bills b
+            LEFT JOIN daily_folios f ON f.day_date = b.day_date
+            ORDER BY b.day_date ASC
         """;
-        List<Map<String, Object>> weeklyChart = jdbcTemplate.queryForList(sqlWeeklyChart, tenantId, rangeStart, rangeEnd);
+        List<Map<String, Object>> weeklyChart = jdbcTemplate.queryForList(sqlWeeklyChart, tenantId, rangeStart, rangeEnd, tenantId, rangeStart, rangeEnd);
+
+        // 🟢 RESTORED: Owner Dashboard expects the branch comparison inside branch-summary API
+        List<Map<String, Object>> branchComparison = List.of();
+        if (branchId == null) {
+            String sqlCompare = """
+                WITH prev_bills AS (
+                    SELECT branch_id, COALESCE(SUM(grand_total), 0) AS raw_revenue
+                    FROM bills
+                    WHERE tenant_id = ? AND status NOT IN ('void','refunded') AND created_at BETWEEN ? AND ?
+                    GROUP BY branch_id
+                ),
+                prev_folios AS (
+                    SELECT r.branch_id, COALESCE(SUM(fc.amount), 0) AS deduction
+                    FROM hotel_folio_charges fc
+                    JOIN hotel_reservations r ON r.id = fc.reservation_id
+                    WHERE r.tenant_id = ? AND fc.description LIKE 'Restaurant POS Order %' AND fc.created_at BETWEEN ? AND ?
+                    GROUP BY r.branch_id
+                )
+                SELECT b.name AS name, COALESCE(pb.raw_revenue, 0) - COALESCE(pf.deduction, 0) AS revenue
+                FROM branches b
+                LEFT JOIN prev_bills pb ON pb.branch_id = b.id
+                LEFT JOIN prev_folios pf ON pf.branch_id = b.id
+                WHERE b.tenant_id = ? AND b.is_active = true
+                ORDER BY revenue DESC
+            """;
+            branchComparison = jdbcTemplate.queryForList(sqlCompare, tenantId, rangeStart, rangeEnd, tenantId, rangeStart, rangeEnd, tenantId);
+        }
 
         Map<String, Integer> staffMap = new HashMap<>();
         int totalStaff = 0;
@@ -1737,7 +1657,7 @@ public class ReportsService {
 
         return Map.of(
                 "branch", Map.of("id", branchId != null ? branchId : ""),
-                "period", Map.of("from", rangeFrom, "to", rangeTo),
+                "period", Map.of("from", rangeFrom, "to", rangeTo, "prevFrom", rangeFrom, "prevTo", rangeTo),
                 "revenue", Map.of(
                         "total", revenueRangeClean,
                         "week", revenueWeekClean,
@@ -1781,7 +1701,8 @@ public class ReportsService {
                         "lowStock", lowStock != null ? lowStock : 0,
                         "openShifts", openShifts != null ? openShifts : 0,
                         "housekeepingPending", housekeepingPending != null ? housekeepingPending : 0
-                )
+                ),
+                "branchComparison", branchComparison
         );
     }
 }
