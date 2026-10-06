@@ -109,7 +109,10 @@ public class TableController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('MANAGER', 'OWNER', 'RESTAURANT_MANAGER', 'WAITER')")
-    public ResponseEntity<ApiResponse<Map<String, Boolean>>> remove(@PathVariable UUID id) {
-        return ResponseEntity.ok(ApiResponse.ok(tableService.remove(id)));
+    public ResponseEntity<ApiResponse<Map<String, Boolean>>> remove(
+            @PathVariable UUID id,
+            @RequestHeader("x-tenant-id") UUID tenantId
+    ) {
+        return ResponseEntity.ok(ApiResponse.ok(tableService.remove(id, tenantId)));
     }
 }
