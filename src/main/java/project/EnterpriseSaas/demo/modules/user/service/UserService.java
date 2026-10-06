@@ -3,6 +3,7 @@ package project.EnterpriseSaas.demo.modules.user.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,7 @@ public class UserService {
     private final TenantRepository tenantRepo;
     private final BranchRepository branchRepo;
     private final PasswordEncoder passwordEncoder;
+    private final JdbcTemplate jdbcTemplate; // 🟢 Added to handle direct database operations
 
     // ── Find All Users ───────────────────────────────────────────────────────
 
@@ -167,8 +169,33 @@ public class UserService {
             }
         }
 
-        userRepo.delete(user);
-        log.info("Permanently deleted user {} for tenant {}", id, tenantId);
+        try {
+            // 1. Delete associated security tokens
+            jdbcTemplate.update("DELETE FROM password_reset_tokens WHERE user_id = ?", id);
+
+            // 2. 🟢 Anonymize historical records to keep financial history safe while removing FK locks
+            jdbcTemplate.update("UPDATE shifts SET opened_by = NULL WHERE opened_by = ?", id);
+            jdbcTemplate.update("UPDATE shifts SET closed_by = NULL WHERE closed_by = ?", id);
+            
+            jdbcTemplate.update("UPDATE orders SET created_by = NULL WHERE created_by = ?", id);
+            jdbcTemplate.update("UPDATE orders SET waiter_id = NULL WHERE waiter_id = ?", id);
+            jdbcTemplate.update("UPDATE orders SET cashier_id = NULL WHERE cashier_id = ?", id);
+            
+            jdbcTemplate.update("UPDATE order_items SET voided_by = NULL WHERE voided_by = ?", id);
+            jdbcTemplate.update("UPDATE inventory_transactions SET created_by = NULL WHERE created_by = ?", id);
+            
+            // Handle optional hotel/audit records without crashing if columns differ
+            try { jdbcTemplate.update("UPDATE hotel_reservations SET created_by_id = NULL WHERE created_by_id = ?", id); } catch (Exception ignored) {}
+            try { jdbcTemplate.update("UPDATE audit_logs SET user_id = NULL WHERE user_id = ?", id); } catch (Exception ignored) {}
+
+            // 3. Delete the user
+            userRepo.delete(user);
+            log.info("Permanently deleted user {} for tenant {}", id, tenantId);
+
+        } catch (Exception e) {
+            log.error("Failed to delete user {}: {}", id, e.getMessage(), e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Database prevented user deletion: " + e.getMessage());
+        }
 
         return Map.of("success", true, "message", "User permanently deleted successfully");
     }
